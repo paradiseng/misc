@@ -1,0 +1,643 @@
+execute pathogen#infect()
+
+call plug#begin()
+Plug 'prabirshrestha/async.vim'        " Required for vim-lsp
+Plug 'prabirshrestha/vim-lsp'          " The LSP client
+Plug 'mattn/vim-lsp-settings'          " Automatically manages server installation
+Plug 'prabirshrestha/asyncomplete.vim' " (Optional) For 'as-you-type' popup menus
+Plug 'prabirshrestha/asyncomplete-lsp.vim'
+call plug#end()
+
+"       --query-driver=/opt/tools/gcc/bin/g++,/opt/tools/gcc/bin/gcc,/opt/tools/clang/bin/clang++',
+let g:lsp_settings = {
+\ 'clangd': {
+\     'args': [
+\         '--query-driver=/export/products/gcc-14.2.0/bin/g++,/export/products/gcc-14.2.0/bin/gcc,/export/products/clang/bin/clang++',
+\         '--log=verbose',
+\         '--background-index',
+\     ]
+\   }
+\ }
+
+" if executable('clangd')
+"     au User lsp_setup call lsp#register_server({
+"         \ 'name': 'clangd',
+"         \ 'cmd': {server_info->['clangd', '--log=verbose']},
+"         \ 'whitelist': ['c', 'cpp', 'objc', 'objcpp'],
+"         \ })
+" endif
+
+"         '--header-insertion=never',
+"         '--clang-tidy',
+"         '--all-scopes-completion'
+" Enable logging (1 = basic, 1 is verbose)
+let g:lsp_log_verbose = 1
+
+" Set a specific file path for the log
+let g:lsp_log_file = expand('~/vim-lsp.log')
+
+" Disable the annoying inline text
+let g:lsp_diagnostics_virtual_text_enabled = 0
+
+" Enable floating windows for diagnostics on hover
+let g:lsp_diagnostics_float_cursor = 1
+
+let g:lsp_diagnostics_float_cursor = 0
+nnoremap <silent> ge :LspDocumentDiagnostics<CR>
+
+" Optional: adjust the delay before the window appears (default is often 4000ms)
+set updatetime=300
+
+" Navigation
+nnoremap <silent> gd    :LspDefinition<CR>
+nnoremap <silent> gs    :split <Bar> LspDefinition<CR>
+nnoremap <silent> gv    :vsplit <Bar> LspDefinition<CR>
+
+nnoremap <silent> gy    :LspTypeDefinition<CR>
+nnoremap <silent> gi    :LspImplementation<CR>
+nnoremap <silent> gr    :LspReferences<CR>
+
+" Information & Refactoring
+nnoremap <silent> K     :LspHover<CR>
+nnoremap <silent> <F2>  :LspRename<CR>
+nnoremap <silent> ga    :LspCodeAction<CR>
+
+" Diagnostic Navigation (Jumping between errors)
+nnoremap <silent> [g    :LspPreviousDiagnostic<CR>
+nnoremap <silent> ]g    :LspNextDiagnostic<CR>
+
+command! LspRestart execute 'LspStopServer' | execute 'e' | execute 'LspStatus'
+
+function! ToggleLspDiagnostics()
+    if g:lsp_diagnostics_enabled
+        let g:lsp_diagnostics_enabled = 0
+        echo "LSP Diagnostics OFF"
+    else
+        let g:lsp_diagnostics_enabled = 1
+        echo "LSP Diagnostics ON"
+    endif
+    " Restart the server to apply changes immediately
+    LspRestart
+endfunction
+
+autocmd WinLeave * if &filetype != 'qf' | let g:last_code_win = win_getid() | endif
+
+function! ToggleSmartLspErrors()
+    " 1. Check if ANY location list is already open
+    let l:loc_winid = filter(getwininfo(), 'v:val.loclist')
+    if !empty(l:loc_winid)
+        " Close it from anywhere
+        windo lclose
+        
+        " wincmd p
+        if exists('g:last_code_win')
+            call win_gotoid(g:last_code_win)
+        endif
+        return
+    endif
+    
+    " 2. We are opening: Clear stale data and get fresh diagnostics
+    call setloclist(0, [], 'r')
+    LspDocumentDiagnostics
+    
+    " 3. Get the current window ID before trying to open the list
+    let l:curr_win = win_getid()
+    
+    " 4. Attempt to open the window if errors exist
+    lwindow
+    
+    " 5. ONLY move the window if lwindow actually opened a new window
+    if win_getid() != l:curr_win
+        " We are now inside the location list window, move it to the bottom
+        wincmd J
+        " Optional: Jump back to the code window so you can keep typing
+        call win_gotoid(l:curr_win)
+    endif
+endfunction
+
+" function! ToggleSmartLspErrors()
+"     " 1. Check if the location list is already open
+"     let l:loc_winid = filter(getwininfo(), 'v:val.loclist')
+" 
+"     if !empty(l:loc_winid)
+"         " 2. We are CLOSING:
+"         " Check if we have a saved 'Main' window to return to
+"         windo lclose
+"         if exists('g:lsp_main_window')
+"             call win_gotoid(g:lsp_main_window)
+"         endif
+"         return
+"     endif
+" 
+"     " 3. We are OPENING:
+"     " Save the CURRENT window ID as the 'Main' window before opening list
+"     let g:lsp_main_window = win_getid()
+" 
+"     call setloclist(0, [], 'r')
+"     LspDocumentDiagnostics
+" 
+"     lwindow
+" 
+"     " 4. If the list opened, move it to bottom but stay in the main window
+"     if win_getid() != g:lsp_main_window
+"         wincmd J
+"         call win_gotoid(g:lsp_main_window)
+"     endif
+" endfunction
+
+" function! SyncLocationListNoJump()
+"     " 1. Find the window ID of the open Location List
+"     let l:loc_info = filter(getwininfo(), 'v:val.loclist')
+"     if empty(l:loc_info) | return | endif
+"     let l:loc_winid = l:loc_info[0].winid
+" 
+"     " 2. Get current line and the full location list
+"     let l:curr_line = line('.')
+"     let l:loc_list = getloclist(0)
+" 
+"     " 3. Find the matching index
+"     let l:index = 1
+"     for item in l:loc_list
+"         if item.lnum == l:curr_line
+"             " 4. MOVE THE HIGHLIGHT ONLY
+"             " win_execute runs the command 'inside' the list window
+"             " without moving your cursor from the code.
+"             call win_execute(l:loc_winid, 'execute ' . l:index)
+"             " Redraw to ensure the highlight moves immediately
+"             redraw
+"             return
+"         endif
+"         let l:index += 1
+"     endfor
+" endfunction
+
+function! SyncLocationListSilent()
+    " 1. Find the window ID of the open Location List
+    let l:loc_info = filter(getwininfo(), 'v:val.loclist')
+    if empty(l:loc_info) | return | endif
+    let l:loc_winid = l:loc_info[0].winid
+
+    " 2. Find the match for the current line
+    let l:curr_line = line('.')
+    let l:loc_list = getloclist(0)
+    let l:index = 1
+
+    for item in l:loc_list
+        if item.lnum == l:curr_line
+            " 3. use win_execute to move the 'active' line in that window
+            " 'normal! m'' saves the position, and 'normal! G' moves it.
+            " we use 'zz' to keep the highlighted error centered in the bottom pane.
+            call win_execute(l:loc_winid, 'exe ' . l:index . ' | normal! zz')
+            return
+        endif
+        let l:index += 1
+    endfor
+endfunction
+
+" Trigger the sync every time the cursor moves (Normal mode)
+" autocmd CursorHold *.c,*.cpp,*.h,*.hpp call SyncLocationListSilent()
+
+" Map it to a shortcut
+let g:toggle_list_no_mappings = 1
+nmap <script> <silent> <leader>q :call ToggleQuickfixList()<CR>
+nnoremap <leader>l :call ToggleSmartLspErrors()<CR>
+
+" 1. When you ENTER any list (Location or Quickfix), save exactly where you came from
+autocmd WinEnter * if &filetype ==# 'qf' | let b:ret_win = win_getid(winnr('#')) | endif
+
+" 2. Map 'q' and 'Enter' to use that saved ID to jump back correctly
+autocmd FileType qf nnoremap <buffer> q :call CloseAndReturn()<CR>
+
+function! CloseAndReturn()
+    " Save the ID we want to return to from the buffer variable
+    let l:target_win = get(b:, 'ret_win', 0)
+
+    " Close both possible list types
+    lclose
+    cclose
+
+    " If we have a saved ID, force vim to go there
+    if l:target_win != 0
+        call win_gotoid(l:target_win)
+    endif
+endfunction
+
+" autocmd FileType qf nnoremap <buffer> q :quit<CR>
+
+" Lightline
+""""""""""""""""""""""""""""""""""""""""
+set laststatus=2
+set t_Co=256
+set noshowmode
+"let g:lightline = {
+"      \ 'colorscheme': 'wombat',
+"      \ }
+
+let g:lightline = {
+      \ 'colorscheme': 'wombat',
+      \ 'active': {
+      \   'left': [ [ 'mode', 'paste' ],
+      \             [ 'gitbranch', 'readonly', 'filename', 'modified' ] ]
+      \ },
+      \ 'component_function': {
+      \   'gitbranch': 'fugitive#head'
+      \ },
+      \ }
+""""""""""""""""""""""""""""""""""""""""
+function MoveToPrevTab()
+    "there is only one window
+    if tabpagenr('$') == 1 && winnr('$') == 1
+        return
+    endif
+    "preparing new window
+    let l:tab_nr = tabpagenr('$')
+    let l:cur_buf = bufnr('%')
+    if tabpagenr() != 1
+        close!
+        if l:tab_nr == tabpagenr('$')
+            tabprev
+        endif
+        sp
+    else
+        close!
+        exe "0tabnew"
+    endif
+    "opening current buffer in new window
+    exe "b".l:cur_buf
+endfunc
+
+function MoveToNextTab()
+    "there is only one window
+    if tabpagenr('$') == 1 && winnr('$') == 1
+        return
+    endif
+    "preparing new window
+    let l:tab_nr = tabpagenr('$')
+    let l:cur_buf = bufnr('%')
+    if tabpagenr() < tab_nr
+        close!
+        if l:tab_nr == tabpagenr('$')
+            tabnext
+        endif
+        sp
+    else
+        close!
+        tabnew
+    endif
+    "opening current buffer in new window
+    exe "b".l:cur_buf
+endfunc
+
+set noai
+set sw=4
+set tabstop=4
+"set sw=8
+"set tabstop=8
+set nu
+set mouse=a
+set autoindent
+set cindent
+set expandtab
+filetype indent on
+set hlsearch
+set previewheight=8
+set noea
+set ut=1000
+set backspace=indent,eol,start
+
+set tags=./tags,tags;
+
+if has("mouse_sgr")
+    set ttymouse=sgr
+else
+    set ttymouse=xterm2
+end
+
+syntax on
+
+hi Search ctermbg=blue ctermfg=white
+
+highlight OverLength ctermbg=9 ctermfg=7 guibg=#592929
+" autocmd FileType cpp match OverLength /\%121v.\+/
+
+autocmd FileType python set sw=4 tabstop=4 expandtab
+
+"set viminfo="D:\\kng080217\\_viminfo"
+
+noremap <C-]> g<C-]>
+
+let g:SrcExpl_pluginList = [
+        \ "__Tag_List__",
+        \ "_NERD_tree_",
+        \ "Source_Explorer"
+    \ ]
+
+let Tlist_Show_One_File = 1
+let g:Tlist_WinWidth = 40
+" let g:Tlist_WinWidth = 60
+let g:NERDTreeWinSize = 60
+let g:NERDTreeWinPos = "right"
+let g:NERDTreeMouseMode = 3
+
+let g:NERDTreeDirArrowExpandable = '+'
+let g:NERDTreeDirArrowCollapsible = '-'
+
+" // Use 'Exuberant Ctags' with '--sort=foldcase -R .' or '-L cscope.files' to
+" // create/update a tags file
+let g:SrcExpl_updateTagsCmd = "ctags --sort=foldcase -R ."
+
+" // Do not let the Source Explorer update the tags file when opening
+let g:SrcExpl_isUpdateTags = 0
+
+" // Set "<F12>" key for updating the tags file artificially
+let g:SrcExpl_updateTagsKey = "<F12>"
+
+" Key Mapping --
+" Open and close all the three plugins on the same time
+"nmap <F8>  :TrinityToggleAll<CR>
+"nmap <F8>  :TrinityToggleTagList<CR> \| :TrinityToggleNERDTree<CR>
+"nmap <F8>  :Tlist<CR> \| :NERDTreeToggle<CR> \| <c-w><c-p>
+nmap <F8>  :Tlist<CR> \| :TrinityToggleNERDTree<CR>
+
+" Open and close the srcexpl.vim separately
+nmap <F9>  :TrinityToggleSourceExplorer<CR>
+
+" Open and close the taglist.vim separately
+" nmap <F10> :TrinityToggleTagList<CR>
+nmap <F10> :TlistToggle<CR>
+noremap <c-A> :TlistOpen<CR>
+
+" Open and close the NERD_tree.vim separately
+" nmap <F11> :TrinityToggleNERDTree<CR>
+nmap <F11> :NERDTreeToggle<CR>
+nnoremap <c-S> 99<c-W>>
+
+nnoremap <Leader>s :Gstatus<cr><c-w>T
+
+" // == Source_Explorer ==
+let g:SrcExpl_refreshTime = 3000
+"If you want to use vim with Source Explorer in the UNIXs-console, I suggest map the keys below to jump from one window to another.
+noremap <C-H> <C-W>h
+nmap <C-J> <C-W>j
+nmap <C-K> <C-W>k
+nmap <C-L> <C-W>l
+noremap <Leader>- <C-w>5-
+noremap <Leader>= <C-w>5+
+noremap <Leader>_ <C-w>20-
+noremap <Leader>+ <C-w>20+
+noremap <Leader>, <C-w>5<
+noremap <Leader>. <C-w>5>
+noremap <Leader>< <C-w>20<
+noremap <Leader>> <C-w>20>
+
+tnoremap <C-K> <C-w>k
+
+" Move current tab
+noremap <Leader><c-right> :tabm +1<CR>
+noremap <Leader><c-left> :tabm -1<CR>
+
+" Shortcut accessing tabs
+noremap <c-right> gt
+noremap <c-left> gT
+noremap <Leader>1 1gt
+noremap <Leader>2 2gt
+noremap <Leader>3 3gt
+noremap <Leader>4 4gt
+noremap <Leader>5 5gt
+noremap <Leader>6 6gt
+noremap <Leader>7 7gt
+noremap <Leader>8 8gt
+noremap <Leader>9 9gt
+noremap <Leader>M :call MoveToPrevTab()<CR>
+noremap <Leader>m :call MoveToNextTab()<CR>
+
+"autocmd FileType nerdtree nmap <C-J> <C-J>
+"autocmd FileType nerdtree nmap <C-K> <C-K>
+
+"below key mappings can replace the vim feature for jumping to previously visited locations via jump list.
+
+"nmap <C-I> <C-W>j:call g:SrcExpl_Jump()<CR>
+"nmap <C-O> :call g:SrcExpl_GoBack()<CR>
+
+if &term =~ '^screen'
+    " tmux will send xterm-style keys when its xterm-keys option is on
+    execute "set <xUp>=\e[1;*A"
+    execute "set <xDown>=\e[1;*B"
+    execute "set <xRight>=\e[1;*C"
+    execute "set <xLeft>=\e[1;*D"
+endif
+
+function! MarkWindowSwap()
+    let g:markedWinNum = winnr()
+endfunction
+
+function! DoWindowSwap()
+    "Mark destination
+    let curNum = winnr()
+    let curBuf = bufnr( "%" )
+    exe g:markedWinNum . "wincmd w"
+    "Switch to source and shuffle dest->source
+    let markedBuf = bufnr( "%" )
+    "Hide and open so that we aren't prompted and keep history
+    exe 'hide buf' curBuf
+    "Switch to dest and shuffle source->dest
+    exe curNum . "wincmd w"
+    "Hide and open so that we aren't prompted and keep history
+    exe 'hide buf' markedBuf
+endfunction
+
+noremap <Leader>w :call MarkWindowSwap()<CR>
+noremap <Leader><Space> :call DoWindowSwap()<CR>
+
+noremap <Leader><Up> <C-W>k
+noremap <Leader><Down> <C-W>j
+noremap <Leader><Left> <C-W>h
+noremap <Leader><Right> <C-W>l
+
+"map <C-J> <C-W>j<C-W>_
+"map <C-K> <C-W>k<C-W>_
+"map <C-H> <C-W>h<C-W>_
+"map <C-L> <C-W>l<C-W>_
+
+" Ack
+"""
+if executable('rg')
+    " let g:ackprg = 'rg --vimgrep --no-heading'
+    let g:ackprg = "rg --vimgrep --no-heading -g '!*tags' -g '!*.{svg,png,jpg}'"
+endif
+" if executable('sgrep.sh')
+"    let g:ackprg = 'sgrep.sh'
+" endif
+
+"let g:ack_mappings = {
+"       \"h": "<C-W><CR><C-W>K" }
+
+"let g:ag_lhandler="botright lopen"
+"let g:ag_lhandler="copen <C-W>J"
+
+map <leader>F :Ack!
+map <leader>f :Ack! <cword><CR>
+xnoremap <leader>f :<C-u>Ack!<C-R>
+
+"let g:ack_apply_qmappings = 0
+"let g:ack_apply_lmappings = 0
+
+"""
+
+" Toggle list
+"""
+function! TermActive()
+    let bufferNum = bufnr('ToggleTerminal')
+    if bufferNum != -1 && bufloaded(bufferNum) == 1
+        if bufwinnr(bufferNum) != -1
+            return 1
+        endif
+    endif
+    return 0
+endfunction
+
+function! ToggleListCmd()
+    if TermActive()
+        exec "ToggleTerminal"
+    endif
+
+    exe "botright copen"
+endfunction
+
+function! IsQuickfixOpen() abort
+    let wins = filter(getwininfo(), 'v:val.quickfix && ! v:val.loclist')
+    return !empty(wins)
+endfunction
+
+function! IsQuickfixOpenInCurrentTab() abort
+    let wins = filter(getwininfo(), 'v:val.quickfix && !v:val.loclist && v:val.tabnr == tabpagenr()')
+    return !empty(wins)
+endfunction
+
+function! HideQuickfixToggleTerm()
+    if IsQuickfixOpenInCurrentTab()
+        exec "cclose"
+    endif
+    exec "ToggleTerminal"
+endfunction
+
+function! CloseTermIfActive()
+    if TermActive()
+        exec "ToggleTerminal"
+    endif
+endfunction
+
+autocmd QuickFixCmdPost * call CloseTermIfActive()
+
+"let g:toggle_list_copen_command="botright copen"
+let g:toggle_list_copen_command="call ToggleListCmd()"
+noremap <Leader>p <C-w><c-p>
+noremap <Leader>b <C-w>b
+
+tnoremap <Leader>p <C-w><C-p>
+"""
+
+" QfEnter
+"""
+let g:qfenter_keymap = {}
+let g:qfenter_keymap.open = ['<CR>', '<2-LeftMouse>']
+let g:qfenter_keymap.vopen = ['<Leader><CR>']
+"let g:qfenter_keymap.hopen = ['<Leader><Space>']
+let g:qfenter_keymap.topen = ['<Leader><Tab>']
+
+let g:qfenter_keymap.hopen = ['<Tab>']
+"""
+
+" BufExplorer
+"""
+noremap <Leader>o :BufExplorer<CR>
+noremap <Leader>O :BufExplorerHorizontalSplit<CR>
+"""
+
+" ctrlP
+"""
+let g:ctrlp_prompt_mappings = {
+    \ 'AcceptSelection("h")': ['<c-i>']
+    \ }
+
+function! SearchCurrentFileName()
+    " let var = <ESC>:echo expand('%:t:r')
+    let @f = expand('%:t:r')
+    :exe "normal \<C-p\<C-\>rf"
+endfunction
+
+function! SearchCurrentWord()
+    " CloseTermIfActive()
+
+    exec "ToggleTerminal"
+    :exe "normal \<C-p>\<C-\>w"
+endfunction
+
+map <Leader>h <C-p><C-\>w
+" map <leader>h :call SearchCurrentWord()<CR>
+map <Leader>H :call SearchCurrentFileName()<CR>
+
+let g:ctrlp_by_filename = 1
+let g:ctrlp_working_path_mode = 0
+" let g:ctrlp_user_command = 'find -L %s -type f \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) -not -path "*lib*" -not -path "*obj*" -not -path "*dep*" -not -path "*bin*"'
+let g:ctrlp_user_command = 'find -L %s -type f \( ! -name "*.o" ! -name "*.so" ! -name ".*" ! -name "*.d" \) -not -path "*obj*" -not -path "*dep*" -not -path "*bin*"'
+"  g:ctrlp_user_command = 'rg --files --hidden -g ""'
+" t g:ctrlp_match_func = { 'match': 'pymatcher#PyMatch' }
+
+" not working
+"let g:ctrlp_custom_ignore = {
+"  \ 'dir':  '\v[\/]\.(git|hg|svn)$',
+"  \ 'file': '\v\.(o|exe|so|dll)$',
+"  \ }
+"
+"  \ 'link': 'SOME_BAD_SYMBOLIC_LINKS',
+"""
+
+" nnoremap <silent> <c-t> :TermToggle <CR>
+" tnoremap <silent> <c-t> <C-\><C-n>:TermToggle <CR>
+" inoremap <silent> <c-t> <C-O>:TermToggle <CR>
+
+" map <C-0> to toggle
+
+function! TermInsert()
+    let bufferNum = bufnr('ToggleTerminal')
+    if bufferNum != -1 && bufloaded(bufferNum) == 1
+        let windowNum = bufwinnr(bufferNum)
+        if winnr() == windowNum
+            call feedkeys("i")
+        endif
+    endif
+endfunction
+
+" tnoremap <silent> <c-@> <C-w>:ToggleTerminal<CR>
+" nnoremap <silent> <c-@> :ToggleTerminal<CR>
+
+tnoremap <silent> <C-@> <C-w>:ToggleTerminal<CR>
+nnoremap <silent> <C-@> :call HideQuickfixToggleTerm()<CR>
+let g:toggle_terminal#command = 'bash'
+
+set termwinsize=20x0
+
+tnoremap <PageUp> <C-w>N<PageUp>
+tnoremap <PageDown> <C-w>N<PageDown>
+" tnoremap <ESC> <C-W>N
+tnoremap <Leader><Esc> <C-w>N
+noremap <silent> <Esc> :call TermInsert()<CR>
+noremap <silent> <C-c> :call TermInsert()<CR>
+
+tnoremap <Esc><BS> <C-w>
+set maxmempattern=5000
+
+colorscheme slate
+colorscheme wildcharm
+
+
+
+" set omnifunc=ale#completion#OmniFunc
+" set signcolumn=yes
+" nnoremap K <cmd>ALEHover<CR>
+" nnoremap <leader>gd <cmd>ALEGoToDefinition<CR>
+" nnoremap <leader>gr <cmd>ALEFindReferences<CR>
+" nnoremap <leader>ca <cmd>ALECodeAction<CR>
+" let g:ale_completion_enabled = 1
+" set completeopt=menuone,noselect
